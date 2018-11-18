@@ -1,0 +1,205 @@
+# -*- coding: utf-8 -*-
+import scrapy
+from scrapy.http import Request
+from scrapy.selector import Selector
+from omg.items import OmgItem
+import copy
+import re
+import time
+from selenium import webdriver
+import requests
+
+option = webdriver.ChromeOptions()
+option.add_argument('headless')
+driver = webdriver.Chrome(chrome_options=option)
+
+class CaoSpider(scrapy.Spider):
+    name = 'cao'
+    allowed_domains = ['gushiwen.org']
+    start_urls = ['https://www.gushiwen.org/shiwen/']
+
+
+
+    def parse(self, response):
+        url_base = 'https://www.gushiwen.org'
+        sel = Selector(response)
+        items = []
+
+
+        class_name_list = sel.xpath('//div[@id="type1"]/div[2]/a/text()').extract()
+        class_url_list = sel.xpath('//div[@id="type1"]/div[2]/a/@href').extract()
+        for i in range(len(class_name_list)):
+            item = OmgItem()
+            item['class_name'] = class_name_list[i]
+            item['class_url_base'] = url_base+class_url_list[i]
+            yield Request(url=item['class_url_base'],meta={'item':copy.deepcopy(item)},callback=self.class_url_parse,dont_filter=True)
+
+    def class_url_parse(self,response):
+        sel_1 = Selector(response)
+        item = response.meta['item']
+        page_count = sel_1.xpath('//form[@id="FromPage"]/div/span[1]/text()').extract()
+        if len(page_count) == 0:
+            page_count = 0
+        else:
+            page_count = int(re.search(r'([0-9]\d*)',page_count[0])[0])
+
+        class_url_base = response.url
+        for i in range(page_count):
+            item = response.meta['item']
+            temp = str(i+1)
+            class_url = re.sub(r'(\d+)(?=[\d\D]{5}$)',temp,class_url_base)
+
+            item['class_url'] = class_url
+            # print(item)
+            yield Request(url=item['class_url'],meta={'item':copy.deepcopy(item)},callback=self.poem_url_parse,dont_filter=True)
+
+    def poem_url_parse(self,response):
+        sel_1 = Selector(response)
+        poem_url_list = sel_1.xpath('/html/body/div[2]/div[1]/div/div[1]/p[1]/a/@href').extract()
+        for i in range(len(poem_url_list)):
+            item = response.meta['item']
+            item['poem_url'] = poem_url_list[i]
+            # print(item)
+
+            yield Request(url=item['poem_url'],meta={'item':copy.deepcopy(item)},callback=self.content_parse,dont_filter=True)
+
+    def content_parse(self,response):
+        # time.sleep(0.2)
+        item = response.meta['item']
+        sel_2 = Selector(response)
+        # item['res_url'] = response.url
+        poem_position = sel_2.xpath('//div[@class="cont"]')[1]
+        poem_title = poem_position.xpath('h1/text()').extract()[0]
+        poem_author = poem_position.xpath('p/a[2]/text()').extract()[0]
+        poem_dynasty = poem_position.xpath('p/a[1]/text()').extract()[0]
+        item['poem_title'] = poem_title
+        item['poem_author'] = poem_author
+        item['poem_dynasty'] = poem_dynasty
+
+        content_position = sel_2.xpath('//div[@class="contson"]')[0]
+        content = content_position.xpath('string(.)').extract()[0].strip()
+        item['poem_content'] = re.sub('\n','',content)
+
+        # print('**********************************************************')
+        #
+        # translate_note = sel_2.xpath('//div[@class="sons"]')[1].xpath('string(.)').extract()[0].strip()
+        # print(translate_note)
+        #
+        # if translate_note.startswith('译文及注释'):
+        #     print('都有')
+        # if translate_note.startswith('译文'):
+        #     print('只有译文')
+        # if translate_note.startswith('注释'):
+        #     print('只有注释')
+        # else:
+        #     print('没有译文也没有注释')
+
+
+
+        #判断返回哪个url
+        translate_note = sel_2.xpath('//div[@class="sons"]')[1].xpath('string(.)').extract()[0].strip()
+        # print(translate_note)
+        url_id = re.split('[_,.]',response.url)[-2]
+        url_1 = 'https://so.gushiwen.org/shiwen2017/ajaxshiwencont.aspx?id='+url_id+'&value=yi'
+        url_2 = 'https://so.gushiwen.org/shiwen2017/ajaxshiwencont.aspx?id='+url_id+'&value=zhu'
+        url_3 = 'https://so.gushiwen.org/shiwen2017/ajaxshiwencont.aspx?id='+url_id+'&value=yizhu'
+
+        if translate_note.startswith('译文及注释'):
+            yield Request(url=url_3,meta={'item':copy.deepcopy(item)},callback=self.translate_note_parse,dont_filter=True)
+        else:
+            if translate_note.startswith('译文'):
+                item['poem_note'] = '没有注释'
+                yield Request(url=url_1,meta={'item':copy.deepcopy(item)},callback=self.translate_note_parse,dont_filter=True)
+            else:
+                if translate_note.startswith('注释'):
+                    item['poem_translate'] = '没有翻译'
+                    yield Request(url=url_2, meta={'item': copy.deepcopy(item)}, callback=self.translate_note_parse,dont_filter=True)
+                else:
+                    item['poem_translate'] = '没有翻译'
+                    item['poem_note'] = '没有注释'
+                    print(item)
+                    yield item
+
+
+
+        '''
+        #判断是否有翻译和注释
+
+        driver.get(response.url)
+        note_status = driver.find_element_by_xpath('//div[@class="main3"]/div[1]/div[2]/div[1]/div[1]/img[3]').get_attribute("style").strip()
+        translate_status = driver.find_element_by_xpath('//div[@class="main3"]/div[1]/div[2]/div[1]/div[1]/img[4]').get_attribute("style").strip()
+
+        #只有翻译没有注释
+        if note_status == 'display: none;' and translate_status == 'display: block;':
+            item['poem_note'] = '没有注释'
+            url_id = re.split('[_,.]',response.url)[-2]
+            translate_url = 'https://so.gushiwen.org/shiwen2017/ajaxshiwencont.aspx?id='+url_id+'&value=yi'
+            yield Request(url=translate_url,meta={'item':copy.deepcopy(item)},callback=self.translate_note_parse,dont_filter=True)
+
+        #只有注释没有翻译
+        if translate_status == 'display: none;' and note_status == 'display: block;':
+            item['poem_translate'] = '没有翻译'
+            url_id = re.split('[_,.]', response.url)[-2]
+            note_url = 'https://so.gushiwen.org/shiwen2017/ajaxshiwencont.aspx?id=' + url_id + '&value=zhu'
+            yield Request(url=note_url, meta={'item': copy.deepcopy(item)}, callback=self.translate_note_parse,dont_filter=True)
+
+        #没有翻译没有注释
+        if  note_status == 'display: none;' and translate_status == 'display: none;':
+            item['poem_translate'] = '没有翻译'
+            item['poem_note'] = '没有注释'
+            yield item
+
+        #既有注释也有翻译
+        else:
+            url_id = re.split('[_,.]', response.url)[-2]
+            note_url = 'https://so.gushiwen.org/shiwen2017/ajaxshiwencont.aspx?id=' + url_id + '&value=yizhu'
+            yield Request(url=note_url, meta={'item': copy.deepcopy(item)}, callback=self.translate_note_parse,dont_filter=True)
+            '''
+
+
+    def translate_note_parse(self,response):
+
+        sel_3 = Selector(response)
+        item = response.meta['item']
+        who = re.split('[=]',response.url)[-1]
+        #判断是否有翻译或者注释
+        if who == 'yi':
+            p_cout = sel_3.xpath('/html/body/p')
+            translate = ''
+            for i in range(len(p_cout) - 1):
+                span_cout = p_cout[i].xpath('span')
+                translate += span_cout[len(span_cout)-1].xpath('string(.)').extract()[0].strip()
+            item['poem_translate'] = translate
+
+        if who == 'zhu':
+            p_cout = sel_3.xpath('/html/body/p')
+            note = ''
+            for i in range(len(p_cout) - 1):
+                span_cout = p_cout[i].xpath('span')
+                note += span_cout[len(span_cout) - 1].xpath('string(.)').extract()[0].strip()
+            item['poem_note'] = note
+
+
+        if who == 'yizhu':
+            p_cout = sel_3.xpath('/html/body/p')
+            translate = ''
+            note = ''
+
+            for i in range(len(p_cout) - 1):
+                span_cout = p_cout[i].xpath('span')
+                note += span_cout[len(span_cout) - 1].xpath('string(.)').extract()[0].strip()
+                translate += span_cout[len(span_cout) - 2].xpath('string(.)').extract()[0].strip()
+            item['poem_translate'] = translate
+            item['poem_note'] = note
+        print(item)
+        yield item
+
+
+
+
+
+
+
+
+
+
