@@ -80,22 +80,6 @@ class CaoSpider(scrapy.Spider):
         content = content_position.xpath('string(.)').extract()[0].strip()
         item['poem_content'] = re.sub('\n','',content)
 
-        # print('**********************************************************')
-        #
-        # translate_note = sel_2.xpath('//div[@class="sons"]')[1].xpath('string(.)').extract()[0].strip()
-        # print(translate_note)
-        #
-        # if translate_note.startswith('译文及注释'):
-        #     print('都有')
-        # if translate_note.startswith('译文'):
-        #     print('只有译文')
-        # if translate_note.startswith('注释'):
-        #     print('只有注释')
-        # else:
-        #     print('没有译文也没有注释')
-
-
-
         #判断返回哪个url
         translate_note = sel_2.xpath('//div[@class="sons"]')[1].xpath('string(.)').extract()[0].strip()
         # print(translate_note)
